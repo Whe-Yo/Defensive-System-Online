@@ -261,7 +261,7 @@ def draw_boss(fb, p0, frame, accent, firing):
         fb.add(ex, p0 + 2, lerp(accent, WHITE, 0.5 + 0.3 * pulse), 1.0)
         if firing:
             fb.add(ex, p0 + 3, ENEMY, 0.5)
-    return fb.w // 2, base
+    return fb.w // 2, p0 + 2          # aim at the boss core (centre eye row)
 
 
 def draw_searchlight(fb, ox, oy, top_y, angle):
@@ -403,8 +403,8 @@ def build_scene(fb, overlay, sessions, frame, rows, cols):
             bx = margin + (span * (2 * j + 1)) // (2 * m)
             by = sky_top + (noise(i, 4, 0) % span_y) + int(round(math.sin(frame * 0.1 + i)))
             draw_enemy(fb, bx, by, min(2, tiers[i]), eff, accent, frame)
-            if eff == "working":                         # turret beam UP at engaged
-                fb.line(muzzle[0], muzzle[1], bx, by + 1, accent, frame=frame, dashed=True)
+            if eff == "working":                         # turret beam at the contact's core
+                fb.line(muzzle[0], muzzle[1], bx, by, accent, frame=frame, dashed=True)
                 fb.add(muzzle[0], muzzle[1], WHITE, 1.0)
             elif eff != "offline":                       # occasional alien fire DOWN
                 tt = (frame * 2 + i * 9) % 64
