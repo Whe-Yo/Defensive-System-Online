@@ -230,12 +230,26 @@ def tier(st):
     return 0 if s < TIERS[0] else 1 if s < TIERS[1] else 2 if s < TIERS[2] else 3
 
 
+def has_work(s):
+    """True if the session is worth showing: actively engaged, or still has queued
+    tasks. Idle-with-nothing-to-do and offline sessions are hidden."""
+    if s["_eff"] == "offline":
+        return False
+    if s["_eff"] in ("working", "thinking", "waiting"):
+        return True
+    return any(t.get("s") in ("pending", "in_progress")     # idle, but tasks remain
+               for t in (s.get("todos") or []) if t.get("c"))
+
+
 def build_contacts(sessions):
     """Expand sessions into contacts. A session running a TodoWrite task list yields
     one contact per todo (pending / in_progress shown, completed -> 'done'); a
-    session with no todos yields a single session-level contact (fallback)."""
+    session with no todos yields a single session-level contact (fallback).
+    Sessions with nothing to do are skipped."""
     out = []
     for s in sessions:
+        if not has_work(s):                                 # hide idle / done / offline sessions
+            continue
         base = {"sid": s.get("session_id", ""),
                 "project": os.path.basename(s.get("cwd", "")) or "~",
                 "hits": s.get("tool_count", 0),
@@ -249,7 +263,7 @@ def build_contacts(sessions):
                 if stt == "completed":
                     eff, ct, sc = "done", 0, 0
                 elif stt == "in_progress":
-                    eff = s["_eff"] if s["_eff"] in ("working", "thinking", "waiting") else "working"
+                    eff = s["_eff"] if s["_eff"] in ("working", "thinking", "waiting") else "idle"
                     ct, sc = stier, ssc
                 else:
                     eff, ct, sc = "pending", 0, 0
@@ -490,7 +504,8 @@ COMMS = {                          # short grimdark vox-lines that fit the corne
     "many":  ["THEY COME ENDLESS", "NO END TO THEM", "A TIDE OF THEM"],
     "one":   ["TARGET MARKED", "BURN IT DOWN", "ONE LESS"],
     "watch": ["THEY CIRCLE US", "EYES TO THE DARK", "SOMETHING STIRS"],
-    "clear": ["AN ILL-OMENED CALM", "THE LULL BEFORE", "TOO QUIET..."],
+    "clear": ["THE CALM WON'T LAST", "THEY WILL COME", "SOMETHING APPROACHES",
+              "TOO QUIET...", "THE VOID STIRS", "NOT IF, BUT WHEN", "STAND READY"],
 }
 INVADER_COMMS = ["WE ARE LEGION", "YOU ARE PREY", "YOUR WALLS FALL",
                  "I SEE YOU", "WE HUNGER", "NO ESCAPE", "FLESH AND ASH",
@@ -505,28 +520,25 @@ HOLD_CALLS = [
 STATIC = ".:'`~*"                  # radio-static flecks on the panel border
 
 
-def pick_comms(sessions, seq, active, lost):
-    """Choose a radio line for the current scene state (priority + per-volley pick)."""
-    n = len(sessions)
-    if any(tier(s) >= 3 for s in sessions):
+def pick_comms(sky, seq):
+    """Choose a radio line for the displayed contacts (priority + per-volley pick).
+    HOLD/waiting is handled separately in draw_comms."""
+    eng = sum(1 for c in sky if c["eff"] == "working")
+    if any(c["tier"] >= 3 for c in sky):
         key = "boss"
-    elif any(s["_eff"] == "waiting" for s in sessions):
-        key = "hold"
-    elif active >= 2:
+    elif eng >= 2:
         key = "many"
-    elif active == 1:
+    elif eng == 1:
         key = "one"
-    elif n > 0:
+    elif sky:
         key = "watch"
     else:
-        key = "clear"
-    if lost and key in ("watch", "clear", "many", "one") and seq % 4 == 3:
-        key = "lost"                                       # occasional callout for losses
+        key = "clear"                                      # nothing out there (yet)
     pool = COMMS[key]
     return pool[seq % len(pool)]
 
 
-def draw_comms(overlay, cx, surf_char, cols, frame, sessions, active, lost):
+def draw_comms(overlay, cx, surf_char, cols, frame, sessions, sky):
     """An allied comms panel at the turret's upper-right. It appears ONLY while
     transmitting (intermittent); the line sits inside a thin box drawn with real
     box-drawing glyphs (a true 1-px line, not half-blocks)."""
@@ -557,7 +569,7 @@ def draw_comms(overlay, cx, surf_char, cols, frame, sessions, active, lost):
             sig = 0.86 + 0.14 * (noise(frame, 1, 1) / 255.0)
     else:                                                  # steady allied green vox
         col = COMMS_COL
-        msg = pick_comms(sessions, seq, active, lost)
+        msg = pick_comms(sky, seq)
         fleck, jit0, jit1 = 4, 0.82, 0.18                  # subtle flecks, gentle jitter
         sig = 0.86 + 0.14 * (noise(frame, 1, 1) / 255.0)
 
@@ -662,7 +674,7 @@ def build_scene(fb, overlay, sessions, frame, rows, cols):
         fb.set(cx - d, ground_px - 1, WHITE)
     muzzle = draw_turret(fb, cx, ground_px, frame)      # 3-cell tower planted on the line
     draw_underground(fb, cx, ground_px, frame, powered)  # supply feed into base while firing
-    draw_comms(overlay, cx, surf_char, cols, frame, sessions, active, lost)
+    draw_comms(overlay, cx, surf_char, cols, frame, sessions, sky)
 
     ns = len(sky)
     if ns:
