@@ -53,12 +53,15 @@ STAR_BRT = (215, 225, 245)
 GROUND = (10, 30, 28)
 GROUND_RIM = (40, 120, 110)
 CITY = (120, 200, 180)
-TURRET_HULL = (60, 150, 170)
-TURRET_HI = (130, 220, 235)
-TURRET_SH = (28, 70, 86)
+TURRET_HULL = (120, 120, 120)
+TURRET_HI = (195, 195, 195)
+TURRET_SH = (70, 70, 70)
 TURRET_BARREL = (170, 235, 245)
 HOSTILE_DARK = (24, 14, 30)
 WHITE = (245, 255, 250)
+ENEMY = (255, 78, 78)          # incoming alien fire
+GREY = (170, 170, 170)         # neutral grey (r=g=b -> stays grey, not blue, in 256c)
+ENERGY = (90, 220, 230)        # underground energy flow converging into the base
 
 STATUS = {
     "working":  ((80, 255, 150), "ENGAGED",  "교전"),     # turret fires
@@ -192,48 +195,142 @@ class FB:
 DOT = {"working": "*", "thinking": "+", "waiting": "!", "idle": "o", "offline": "x"}
 
 
-def draw_turret(fb, cx, top, frame):
-    """Small flat square defense base (sits on the ground lights). top = base top px."""
-    for j in range(2):                                # 5-wide x 2-tall flat block
-        for dx in range(-2, 3):
-            col = (TURRET_HI if abs(dx) == 2 else TURRET_HULL) if j == 0 else TURRET_SH
-            fb.set(cx + dx, top + j, col)
-    return cx, top - 1                                # beams emanate from top centre
+def draw_turret(fb, cx, bottom, frame):
+    """Small rectangular base, 5 px wide x 3 px tall, planted with its base on
+    `bottom`. Returns the muzzle point just above the top."""
+    half, h = 2, 3
+    top = bottom - (h - 1)
+    for j in range(h):
+        y = top + j
+        for dx in range(-half, half + 1):
+            edge = abs(dx) == half or j == 0
+            col = TURRET_HI if edge else (TURRET_HULL if j < h - 1 else TURRET_SH)
+            fb.set(cx + dx, y, col)
+    fb.add(cx, top, (210, 210, 215), 0.9)             # grey core glow at the top
+    return cx, top - 1
 
 
-def draw_blip(fb, cx, cy, eff, accent, frame):
-    """Small contact blip (3x3 diamond) for the banner radar."""
+TIERS = (8, 30, 100)           # tool_count thresholds: cross | diamond | large | BOSS
+
+
+def tier(st):
+    """Task-scale proxy from cumulative tool calls (Claude exposes no true size)."""
+    h = st.get("tool_count", 0)
+    return 0 if h < TIERS[0] else 1 if h < TIERS[1] else 2 if h < TIERS[2] else 3
+
+
+def draw_enemy(fb, cx, cy, t, eff, accent, frame):
+    """Contact sized by task scale: 0 small cross, 1 diamond, 2 large diamond."""
     pulse = 0.55 + 0.45 * math.sin(frame * 0.3 + cx)
     body = accent if eff != "offline" else dim(accent, 0.4)
-    for dx, dy in ((0, -1), (-1, 0), (1, 0), (0, 1)):
-        fb.set(cx + dx, cy + dy, lerp(dim(body, 0.5), body, pulse))
-    fb.set(cx, cy, lerp(body, WHITE, 0.4 + 0.3 * pulse))   # bright core
+    eye = lerp(body, WHITE, 0.4 + 0.3 * pulse)
+    if t == 0:                                             # small cross
+        fb.set(cx, cy, eye)
+        for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            fb.set(cx + dx, cy + dy, body)
+    elif t == 1:                                           # diamond + spike legs
+        for dx, dy in ((0, -1), (-1, 0), (1, 0), (0, 1)):
+            fb.set(cx + dx, cy + dy, lerp(dim(body, 0.5), body, pulse))
+        for dx, dy in ((-2, -1), (2, -1), (-2, 1), (2, 1)):
+            fb.set(cx + dx, cy + dy, dim(body, 0.7))
+        fb.set(cx, cy, eye)
+    else:                                                  # large diamond
+        for dy in range(-2, 3):
+            w = 2 - abs(dy)
+            for dx in range(-w, w + 1):
+                fb.set(cx + dx, cy + dy, lerp(dim(body, 0.5), body, pulse))
+        for dx, dy in ((-3, 0), (3, 0), (0, -3), (0, 3)):
+            fb.set(cx + dx, cy + dy, dim(body, 0.7))
+        for dx in (-1, 0, 1):
+            fb.set(cx + dx, cy, eye)
 
 
-# ---- overlay text -----------------------------------------------------------
-_BLOCK = set("█░▀▒▓")
+def draw_boss(fb, p0, frame, accent, firing):
+    """Colossal contact covering the top band of the sky. Returns the beam target."""
+    x0, x1 = 3, fb.w - 3
+    base = p0 + 6
+    body = lerp(HOSTILE_DARK, accent, 0.30)
+    for x in range(x0, x1):
+        jag = base - (1 + noise(x, 2, frame // 6) % 3)     # jagged underside
+        for y in range(p0, jag + 1):
+            fb.set(x, y, body)
+        fb.add(x, jag, accent, 0.45)                       # glowing rim
+    pulse = 0.5 + 0.5 * math.sin(frame * 0.2)
+    for k in range(5):                                     # glowing eyes
+        ex = x0 + (x1 - x0) * (2 * k + 1) // 10
+        fb.add(ex, p0 + 2, lerp(accent, WHITE, 0.5 + 0.3 * pulse), 1.0)
+        if firing:
+            fb.add(ex, p0 + 3, ENEMY, 0.5)
+    return fb.w // 2, base
 
 
-def _safe(ch):
-    """Force width-1: arbitrary CJK/emoji in actions/paths would render 2 cells
-    and desync the column model, so map any wide/ambiguous glyph to '?'."""
-    if 32 <= ord(ch) < 127 or ch in _BLOCK:
-        return ch
-    return "?" if unicodedata.east_asian_width(ch) in ("W", "F", "A") else ch
+def draw_searchlight(fb, ox, oy, top_y, angle):
+    """Dim grey beam sweeping the sky (searching for contacts). Background only."""
+    length = max(1, oy - top_y)
+    for d in range(length):
+        y = oy - d
+        x = ox + int(round(math.tan(angle) * d))
+        spread = 2 + d // 7                                # a bit thicker cone
+        a = 0.42 - 0.16 * (d / length)                     # a bit brighter, visible to the top
+        for w in range(-spread, spread + 1):
+            fb.add(x + w, y, GREY, a * (1 - abs(w) / (spread + 1)))
+
+
+def draw_underground(fb, cx, surf, frame, powered):
+    """A single half-pixel line below the ground: energy pulses march inward from
+    both edges and converge into the base (symmetric; brighter/faster while firing)."""
+    y = surf + 1                                           # one pixel row = half a cell
+    step = (frame * (2 if powered else 1)) // 3            # slower inward march
+    for x in range(fb.w):
+        dist = abs(x - cx)                                 # symmetric about the base
+        if (dist + step) % 6 < 2:                          # pulses converge toward centre
+            near = 1.0 - dist / max(1, cx)                 # brighter as it nears the base
+            a = (0.35 + 0.5 * near) * (1.2 if powered else 0.8)
+            fb.add(x, y, ENERGY, min(1.0, a))
+    fb.add(cx, surf, lerp(ENERGY, WHITE, 0.4), 0.9 if powered else 0.6)  # convergence point
+
+
+# ---- overlay text (width-aware: CJK/emoji render as 2 terminal cells) -------
+def cw(ch):
+    """Display width of a character: 2 for wide/fullwidth (한글·CJK·emoji), else 1."""
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
+def dw(s):
+    return sum(cw(c) for c in s)
+
+
+def fit(s, width):
+    """Truncate to <= `width` display columns, marking a cut with '..'."""
+    if dw(s) <= width:
+        return s
+    out, w = [], 0
+    for ch in s:
+        if w + cw(ch) > width - 2:
+            break
+        out.append(ch)
+        w += cw(ch)
+    return "".join(out) + ".."
 
 
 def put_text(overlay, row, col, s, rgb, maxcol, mincol=0):
-    for i, ch in enumerate(s):
-        c = col + i
-        if c >= maxcol:
+    """Place text; a width-2 glyph occupies cell c plus a `None` continuation
+    cell c+1 so the column model stays aligned with what the terminal renders."""
+    c = col
+    for ch in s:
+        w = cw(ch)
+        if c + w > maxcol:
             break
         if c >= mincol and ch != " ":
-            overlay[(row, c)] = (_safe(ch), rgb)
-    return col + len(s)
+            overlay[(row, c)] = (ch, rgb)
+            if w == 2:
+                overlay[(row, c + 1)] = (None, rgb)
+        c += w
+    return c
 
 
 def put_center(overlay, row, cx, s, rgb, maxcol):
-    return put_text(overlay, row, cx - len(s) // 2, s, rgb, maxcol)
+    return put_text(overlay, row, cx - dw(s) // 2, s, rgb, maxcol)
 
 
 def sig_blocks(st, n=8):
@@ -262,29 +359,63 @@ def build_scene(fb, overlay, sessions, frame, rows, cols):
     hud = f"{active} ENGAGING  {len(sessions)} CONTACTS  {lost} LOST   q quit"
     put_text(overlay, 0, max(19, cols - len(hud) - 1), hud, cyan, cols)
 
-    # ---- compact battle banner (pixels, char rows 1..ban_h) ----
-    ban_top, ban_h = 1, 6
-    p0, p1 = ban_top * 2, (ban_top + ban_h) * 2 - 1
+    # ---- scene: sky (top) | ground at terminal centre | 3-row underground ----
     cx = cols // 2
-    for d in range(0, cx, 4):                           # symmetric base lights (about centre)
-        fb.set(cx + d, p1, CITY)
-        fb.set(cx - d, p1, CITY)
-    muzzle = draw_turret(fb, cx, p1 - 1, frame)         # base sits on the light row
+    p0 = 2                                              # top of sky (below header)
+    surf_char = rows // 2                               # ground line at terminal centre
+    ground_px = surf_char * 2 + 1
+    powered = active > 0
+
+    for j, ph in enumerate((0.0, math.pi)):             # grey searchlights, up to screen top
+        ox = cx + (cols // 4) * (1 if j else -1)
+        draw_searchlight(fb, ox, ground_px - 1, 0, 0.4 * math.sin(frame * 0.045 + ph))
+    for x in range(cols):                               # single ground line (grey)
+        fb.add(x, ground_px, GREY, 0.4)
+    for d in range(8, cx, 8):                           # white perimeter lights ABOVE the line
+        fb.set(cx + d, ground_px - 1, WHITE)
+        fb.set(cx - d, ground_px - 1, WHITE)
+    muzzle = draw_turret(fb, cx, ground_px, frame)      # 3-cell tower planted on the line
+    draw_underground(fb, cx, ground_px, frame, powered)  # supply feed into base while firing
+
     n = len(sessions)
     if n:
+        tiers = [tier(s) for s in sessions]
+        boss_i = None                                    # one colossal boss = the largest >= tier 3
+        cand = [(s.get("tool_count", 0), i) for i, s in enumerate(sessions) if tiers[i] >= 3]
+        if cand:
+            boss_i = max(cand)[1]
+            bs = sessions[boss_i]
+            beff = bs["_eff"]
+            bacc = STATUS.get(beff, ((200, 200, 200),))[0]
+            btx, bty = draw_boss(fb, p0, frame, bacc, beff == "working")
+            if beff == "working":
+                fb.line(muzzle[0], muzzle[1], btx, bty, bacc, frame=frame, dashed=True)
+                fb.add(muzzle[0], muzzle[1], WHITE, 1.0)
+        sky_top = p0 + 8 if boss_i is not None else p0 + 1
+        others = [i for i in range(n) if i != boss_i]
+        m = max(1, len(others))
         margin, span = 6, max(1, cols - 12)
-        for i, st in enumerate(sessions):
+        span_y = max(2, ground_px - 3 - sky_top)         # scatter contacts below the boss
+        for j, i in enumerate(others):
+            st = sessions[i]
             eff = st["_eff"]
             accent = STATUS.get(eff, ((200, 200, 200),))[0]
-            bx = margin + (span * (2 * i + 1)) // (2 * n)
-            by = p0 + 2 + (noise(i, 4, 0) % 3) + int(round(math.sin(frame * 0.1 + i)))
-            draw_blip(fb, bx, by, eff, accent, frame)
-            if eff == "working":
+            bx = margin + (span * (2 * j + 1)) // (2 * m)
+            by = sky_top + (noise(i, 4, 0) % span_y) + int(round(math.sin(frame * 0.1 + i)))
+            draw_enemy(fb, bx, by, min(2, tiers[i]), eff, accent, frame)
+            if eff == "working":                         # turret beam UP at engaged
                 fb.line(muzzle[0], muzzle[1], bx, by + 1, accent, frame=frame, dashed=True)
                 fb.add(muzzle[0], muzzle[1], WHITE, 1.0)
+            elif eff != "offline":                       # occasional alien fire DOWN
+                tt = (frame * 2 + i * 9) % 64
+                if tt < 12:
+                    fr = tt / 12.0
+                    ex = int(bx + (cx - bx) * fr)
+                    ey = int((by + 1) + (ground_px - 2 - (by + 1)) * fr)
+                    fb.add(ex, ey, ENEMY, 0.9)
 
-    # ---- divider (drawn as pixels, not box-drawing chars) ----
-    drow = ban_top + ban_h
+    # ---- divider (below the single underground row) ----
+    drow = surf_char + 2
     for x in range(cols):
         fb.set(x, drow * 2, dim(cyan, 0.35))
         fb.set(x, drow * 2 + 1, dim(cyan, 0.35))
@@ -296,25 +427,24 @@ def build_scene(fb, overlay, sessions, frame, rows, cols):
     for i, st in enumerate(shown):
         eff = st["_eff"]
         accent, label, kor = STATUS.get(eff, ((200, 200, 200), eff, ""))
-        proj = os.path.basename(st.get("cwd", "")) or "~"
-        if len(proj) > 20:
-            proj = proj[:18] + ".."
+        proj = fit(os.path.basename(st.get("cwd", "")) or "~", 20)
         op = fmt_dur(time.time() - st.get("started_at", time.time()))
         hits = st.get("tool_count", 0)
-        action = st.get("action", "") or "—"
+        action = st.get("action", "") or "-"
         if eff == "idle" and st.get("_age", 0) > 2:
             action = f"idle {fmt_dur(st['_age'])}"
         elif eff == "offline":
             action = f"lost {fmt_dur(st['_age'])} ago"
-        tail = f"{hits}t {op}"
+        tail = f"{hits}t {op}"          # {tools}t  {elapsed: s/m/h}
         row = list_top + i
-        put_text(overlay, row, 1, DOT.get(eff, "·"), accent, cols)
-        put_text(overlay, row, 3, label.ljust(9), accent, cols)
-        put_text(overlay, row, 13, proj.ljust(21), cyan, cols)
+        put_text(overlay, row, 1, DOT.get(eff, "?"), accent, cols)
+        put_text(overlay, row, 3, label, accent, 12)
+        put_text(overlay, row, 13, proj, cyan, 34)            # width-aware (한글 OK)
         put_text(overlay, row, 34, sig_blocks(st, 8), accent, cols)
-        put_text(overlay, row, 43, "> " + action,
-                 green if eff == "working" else dim(cyan, 0.85),
-                 cols - len(tail) - 2)
+        # action: fit (by display width) between col 43 and the tail, with a gap
+        avail = max(0, cols - len(tail) - 2 - 45)             # 45 = 43 + len("> ")
+        put_text(overlay, row, 43, "> " + fit(action, avail),
+                 green if eff == "working" else dim(cyan, 0.85), cols - len(tail) - 2)
         put_text(overlay, row, cols - len(tail) - 1, tail, dimc, cols)
 
     if n > len(shown):
@@ -377,6 +507,8 @@ def emit_full(grid, truecolor):
     last = None
     for r, line in enumerate(grid):
         for ch, fg, bg in line:
+            if ch is None:        # continuation of a wide glyph -> emit nothing
+                continue
             s = sgr(fg, bg, truecolor)
             if s != last:
                 out.append(s)
@@ -403,6 +535,9 @@ def emit_diff(prev, grid, truecolor):
             last = None
             while c < n and not (pline and c < len(pline) and pline[c] == line[c]):
                 ch, fg, bg = line[c]
+                if ch is None:    # wide-glyph continuation; head already advanced cursor
+                    c += 1
+                    continue
                 s = sgr(fg, bg, truecolor)
                 if s != last:
                     out.append(s)
