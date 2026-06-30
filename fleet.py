@@ -40,7 +40,8 @@ import math
 import unicodedata
 
 FLEET_DIR = os.path.join(os.path.expanduser("~"), ".claude", "inundation_agent")
-IDLE_AFTER = 20
+IDLE_AFTER = 90       # no events this long -> treat as idle (fallback; Stop sets idle instantly)
+FIRE_LINGER = 6       # a 'thinking' session that ran a tool within this many seconds keeps firing
 OFFLINE_AFTER = 1800
 PRUNE_AFTER = 7200
 
@@ -141,6 +142,8 @@ def read_sessions():
             eff = "offline"
         elif eff in ("working", "thinking") and age > IDLE_AFTER:
             eff = "idle"
+        elif eff == "thinking" and (now - st.get("last_tool_at", 0)) < FIRE_LINGER:
+            eff = "working"          # mid tool-burst (just ran a tool) -> keep firing
         st["_eff"] = eff
         out.append(st)
     out.sort(key=lambda s: (s["_eff"] == "offline", s["_age"]))
@@ -225,9 +228,12 @@ def task_score(st):
     return t * m
 
 
-def tier(st):
-    s = task_score(st)
+def tier_of(s):
     return 0 if s < TIERS[0] else 1 if s < TIERS[1] else 2 if s < TIERS[2] else 3
+
+
+def tier(st):
+    return tier_of(task_score(st))
 
 
 def has_work(s):
@@ -257,7 +263,8 @@ def build_contacts(sessions):
                 "age": s.get("_age", 0)}
         todos = [t for t in (s.get("todos") or []) if t.get("c")]
         if todos and s["_eff"] != "offline":
-            stier, ssc = tier(s), task_score(s)
+            ssc = task_score(s)                             # compute the score once
+            stier = tier_of(ssc)
             for t in todos:
                 stt = t.get("s", "pending")
                 if stt == "completed":
@@ -269,8 +276,9 @@ def build_contacts(sessions):
                     eff, ct, sc = "pending", 0, 0
                 out.append({**base, "eff": eff, "label": t.get("c", ""), "tier": ct, "score": sc, "todo": stt})
         else:
+            fsc = task_score(s)
             out.append({**base, "eff": s["_eff"], "label": s.get("action", "") or "-",
-                        "tier": tier(s), "score": task_score(s), "todo": None})
+                        "tier": tier_of(fsc), "score": fsc, "todo": None})
     return out
 
 
@@ -796,6 +804,8 @@ def sgr(fg, bg, truecolor):
             s = f"\x1b[38;2;{fg[0]};{fg[1]};{fg[2]};48;2;{bg[0]};{bg[1]};{bg[2]}m"
         else:
             s = f"\x1b[38;5;{rgb_to_256(fg)};48;5;{rgb_to_256(bg)}m"
+        if len(_sgr_cache) > 4096:        # bound growth over long runs
+            _sgr_cache.clear()
         _sgr_cache[k] = s
     return s
 
@@ -853,10 +863,15 @@ def term_size():
     return min(sz.columns, MAX_W), min(sz.lines, MAX_H)
 
 
-def render_grid(cols, rows, frame, truecolor):
+POLL_INTERVAL = 0.3                                    # seconds between disk re-reads of session state
+
+
+def render_grid(cols, rows, frame, truecolor, sessions=None):
     fb = FB(cols, rows * 2)
     overlay = {}
-    build_scene(fb, overlay, read_sessions(), frame, rows, cols)
+    if sessions is None:
+        sessions = read_sessions()
+    build_scene(fb, overlay, sessions, frame, rows, cols)
     return make_cells(fb, overlay, rows, cols)
 
 
@@ -895,12 +910,16 @@ def run_loop(fps, truecolor):
         tty.setcbreak(fd)
         prev, psize, frame = None, None, 0
         dt = 1.0 / fps
+        sessions, last_poll = read_sessions(), time.time()
         while not stop["v"]:
             cols, rows = term_size()
             if (cols, rows) != psize:
                 sys.stdout.write("\x1b[2J")
                 prev, psize = None, (cols, rows)
-            grid = render_grid(cols, rows - 1, frame, truecolor)
+            now = time.time()                              # poll session state a few times/sec, not every frame
+            if now - last_poll >= POLL_INTERVAL:
+                sessions, last_poll = read_sessions(), now
+            grid = render_grid(cols, rows - 1, frame, truecolor, sessions)
             out = emit_diff(prev, grid, truecolor) if prev else emit_full(grid, truecolor)
             sys.stdout.write(out)
             sys.stdout.flush()
