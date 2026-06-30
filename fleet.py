@@ -264,6 +264,89 @@ def draw_boss(fb, p0, frame, accent, firing):
     return fb.w // 2, p0 + 2          # aim at the boss core (centre eye row)
 
 
+TRACER = (255, 225, 90)           # yellow allied flak tracer (ground -> up)
+LASER = (130, 220, 255)           # allied laser bolt (ground -> up)
+COMET = (255, 80, 70)             # red comet falling from the sky (enemy attack)
+
+
+def draw_tracers(fb, frame, p0, surf_y, cols):
+    """Faint yellow flak climbing from the ground into the sky at varied angles —
+    a few at a time, short fading tails. Pure, subdued background ambiance."""
+    if surf_y - 1 <= p0:
+        return
+    n = max(3, cols // 18)
+    travel = 24
+    for k in range(n):
+        L = travel + 6 + noise(k, 1, 0) % 16               # in flight `travel`, then a short gap
+        ph = (frame + k * 11) % L
+        if ph >= travel:
+            continue
+        cyc = (frame + k * 11) // L                        # re-randomise each volley
+        x0 = noise(k, 2, cyc) % cols                       # launch column along the ground
+        x1 = x0 + (noise(k, 4, cyc) % 27 - 13)             # wider, more varied slant
+        y0 = surf_y - 1 - noise(k, 5, cyc) % 3             # launch near the ground
+        y1 = p0 - 4                                        # climb past the top of the sky
+        f = ph / travel
+        for t in range(7):                                 # head + fading trail (toward ground)
+            ft = f - t * 0.045
+            if ft < 0:
+                continue
+            x = int(x0 + (x1 - x0) * ft)
+            y = int(y0 + (y1 - y0) * ft)
+            fb.add(x, y, TRACER, max(0.0, 0.38 - t * 0.07))  # subdued, dim
+
+
+def draw_lasers(fb, frame, p0, surf_y, cols):
+    """Allied laser bolts fired straight up from the ground into the sky — brief,
+    dim flashes with a bright tip. Background ambiance."""
+    if surf_y - 1 <= p0:
+        return
+    for k in range(max(1, cols // 40)):
+        L = 56 + noise(k, 8, 0) % 50
+        ph = (frame + k * 29) % L
+        if ph >= 4:                                        # brief flash (~4 frames)
+            continue
+        cyc = (frame + k * 29) // L
+        a = 0.22 * (1 - abs(ph - 1.5) / 2.5)               # fade in then out
+        x0 = noise(k, 10, cyc) % cols                      # ground launch column
+        y0 = surf_y - 1
+        x1 = x0 + (noise(k, 11, cyc) % 17 - 8)             # mild slant up
+        y1 = p0 - 1
+        steps = max(abs(y1 - y0), 1)
+        for i in range(steps + 1):
+            fr = i / steps
+            x = int(x0 + (x1 - x0) * fr)
+            y = int(y0 + (y1 - y0) * fr)
+            fb.add(x, y, LASER, a)
+        fb.add(x1, y1, WHITE, a + 0.18)                    # bright bolt tip
+
+
+def draw_comets(fb, frame, p0, surf_y, cols):
+    """Red comets falling from the sky on a steep diagonal, with a trailing tail."""
+    if surf_y - 1 <= p0:
+        return
+    n = max(1, cols // 32)
+    travel = 22
+    for k in range(n):
+        L = travel + 16 + noise(k, 14, 0) % 30             # rarer than tracers
+        ph = (frame + k * 23) % L
+        if ph >= travel:
+            continue
+        cyc = (frame + k * 23) // L
+        x0 = noise(k, 15, cyc) % cols                      # enters near the top
+        y0 = p0 - 2
+        x1 = x0 + (12 + noise(k, 16, cyc) % 12) * (1 if noise(k, 17, cyc) & 1 else -1)
+        y1 = surf_y - 1
+        f = ph / travel
+        for t in range(7):                                 # head + red tail (toward the sky)
+            ft = f - t * 0.045
+            if ft < 0:
+                continue
+            x = int(x0 + (x1 - x0) * ft)
+            y = int(y0 + (y1 - y0) * ft)
+            fb.add(x, y, lerp(COMET, WHITE, 0.4) if t == 0 else COMET, max(0.0, 0.5 - t * 0.08))
+
+
 def draw_searchlight(fb, ox, oy, top_y, angle):
     """Dim grey beam sweeping the sky (searching for contacts). Background only."""
     length = max(1, oy - top_y)
@@ -366,6 +449,9 @@ def build_scene(fb, overlay, sessions, frame, rows, cols):
     ground_px = surf_char * 2 + 1
     powered = active > 0
 
+    draw_comets(fb, frame, p0, ground_px, cols)         # red comets falling from the sky
+    draw_lasers(fb, frame, p0, ground_px, cols)         # allied laser bolts (ground -> up)
+    draw_tracers(fb, frame, p0, ground_px, cols)        # yellow flak climbing into the sky
     for j, ph in enumerate((0.0, math.pi)):             # grey searchlights, up to screen top
         ox = cx + (cols // 4) * (1 if j else -1)
         draw_searchlight(fb, ox, ground_px - 1, 0, 0.4 * math.sin(frame * 0.045 + ph))
