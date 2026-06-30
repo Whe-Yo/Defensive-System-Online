@@ -98,15 +98,10 @@ def main():
         st["status"] = "thinking"
         st["last_tool_at"] = now
     elif name == "Notification":
-        msg = ev.get("message", "") or ""
-        low = msg.lower()
-        # the idle "waiting for your input" nudge is NOT an actionable hold -> idle;
-        # permission/approval prompts are a real HOLD
-        if "waiting for your input" in low or "is waiting" in low:
-            st["status"] = "idle"
-        else:
-            st["status"] = "waiting"
-        st["action"] = short(msg or "needs input", 38)
+        # any notification = the session is blocked pending the user (permission OR
+        # waiting for input to finish a task) -> HOLD, so it shows as "needs you"
+        st["status"] = "waiting"
+        st["action"] = short(ev.get("message", "needs input"), 38)
     elif name in ("Stop", "SubagentStop"):
         st["status"] = "idle"
         st["action"] = ""
