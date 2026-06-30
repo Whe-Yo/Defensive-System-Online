@@ -217,13 +217,17 @@ def draw_turret(fb, cx, bottom, frame):
 TIERS = (10, 80, 400)          # (tool_count x elapsed-min) thresholds: cross|diamond|large|BOSS
 
 
-def tier(st):
+def task_score(st):
     """Task-scale proxy: cumulative tool calls x elapsed minutes (Claude exposes no
-    true size). Heavier + longer-running work grows into larger contacts."""
+    true size). Heavier + longer-running work scores higher."""
     t = st.get("tool_count", 0)
     m = max(0.0, (time.time() - st.get("started_at", time.time())) / 60.0)
-    score = t * m
-    return 0 if score < TIERS[0] else 1 if score < TIERS[1] else 2 if score < TIERS[2] else 3
+    return t * m
+
+
+def tier(st):
+    s = task_score(st)
+    return 0 if s < TIERS[0] else 1 if s < TIERS[1] else 2 if s < TIERS[2] else 3
 
 
 def build_contacts(sessions):
@@ -239,20 +243,20 @@ def build_contacts(sessions):
                 "age": s.get("_age", 0)}
         todos = [t for t in (s.get("todos") or []) if t.get("c")]
         if todos and s["_eff"] != "offline":
-            stier = tier(s)
+            stier, ssc = tier(s), task_score(s)
             for t in todos:
                 stt = t.get("s", "pending")
                 if stt == "completed":
-                    eff, ct = "done", 0
+                    eff, ct, sc = "done", 0, 0
                 elif stt == "in_progress":
                     eff = s["_eff"] if s["_eff"] in ("working", "thinking", "waiting") else "working"
-                    ct = stier
+                    ct, sc = stier, ssc
                 else:
-                    eff, ct = "pending", 0
-                out.append({**base, "eff": eff, "label": t.get("c", ""), "tier": ct, "todo": stt})
+                    eff, ct, sc = "pending", 0, 0
+                out.append({**base, "eff": eff, "label": t.get("c", ""), "tier": ct, "score": sc, "todo": stt})
         else:
             out.append({**base, "eff": s["_eff"], "label": s.get("action", "") or "-",
-                        "tier": tier(s), "todo": None})
+                        "tier": tier(s), "score": task_score(s), "todo": None})
     return out
 
 
@@ -662,9 +666,9 @@ def build_scene(fb, overlay, sessions, frame, rows, cols):
 
     ns = len(sky)
     if ns:
-        boss_i = None                                    # one colossal boss = the largest >= tier 3
-        cand = [(c["tier"], i) for i, c in enumerate(sky) if c["tier"] >= 3]
-        if cand:
+        boss_i = None                                    # one colossal boss = highest-score tier-3
+        cand = [(c["score"], i) for i, c in enumerate(sky) if c["tier"] >= 3]
+        if cand:                                         # only the top scorer evolves; others stay large
             boss_i = max(cand)[1]
             beff = sky[boss_i]["eff"]
             bacc = STATUS.get(beff, ((200, 200, 200),))[0]
