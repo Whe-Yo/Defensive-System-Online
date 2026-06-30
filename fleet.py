@@ -428,6 +428,100 @@ def sig_blocks(st, n=8):
     return "█" * f + "░" * (n - f)   # block elements = fixed width 1
 
 
+# ---- allied comms chatter (retro-SF military radio, reacts to the scene) ----
+COMMS_COL = (165, 245, 115)        # light-green (연두) comms phosphor
+COMMS_CYCLE = 150                  # frames between transmissions (~12s at 12fps)
+COMMS_ON = 34                      # transmission visible window (~3s)
+COMMS = {                          # short grimdark vox-lines that fit the corner panel
+    "boss":  ["ABOMINATION RISES", "IT BLOTS THE SKY", "WE CANNOT HOLD"],
+    "hold":  ["STAY YOUR GUNS", "AWAIT THE WORD", "HOLD... HOLD..."],
+    "lost":  ["VOX GONE DARK", "ANOTHER SOUL LOST", "THEY ARE GONE"],
+    "many":  ["THEY COME ENDLESS", "NO END TO THEM", "A TIDE OF THEM"],
+    "one":   ["TARGET MARKED", "BURN IT DOWN", "FOR THE FALLEN"],
+    "watch": ["THEY CIRCLE US", "EYES TO THE DARK", "SOMETHING STIRS"],
+    "clear": ["AN ILL-OMENED CALM", "THE LULL BEFORE", "TOO QUIET..."],
+}
+INVADER_COMMS = ["WE ARE LEGION", "YOU ARE PREY", "YOUR WALLS FALL",
+                 "I SEE YOU", "WE HUNGER", "NO ESCAPE", "FLESH AND ASH",
+                 "SILENCE YOUR GODS"]
+STATIC = ".:'`~*"                  # radio-static flecks on the panel border
+
+
+def pick_comms(sessions, seq, active, lost):
+    """Choose a radio line for the current scene state (priority + per-volley pick)."""
+    n = len(sessions)
+    if any(tier(s) >= 3 for s in sessions):
+        key = "boss"
+    elif any(s["_eff"] == "waiting" for s in sessions):
+        key = "hold"
+    elif active >= 2:
+        key = "many"
+    elif active == 1:
+        key = "one"
+    elif n > 0:
+        key = "watch"
+    else:
+        key = "clear"
+    if lost and key in ("watch", "clear", "many", "one") and seq % 4 == 3:
+        key = "lost"                                       # occasional callout for losses
+    pool = COMMS[key]
+    return pool[seq % len(pool)]
+
+
+def draw_comms(overlay, cx, surf_char, cols, frame, sessions, active, lost):
+    """An allied comms panel at the turret's upper-right. It appears ONLY while
+    transmitting (intermittent); the line sits inside a thin box drawn with real
+    box-drawing glyphs (a true 1-px line, not half-blocks)."""
+    if (frame % COMMS_CYCLE) >= COMMS_ON:                  # no transmission -> no box
+        return
+    r_bot = surf_char - 2
+    r_top = r_bot - 2
+    if r_top < 1:
+        return
+    seq = frame // COMMS_CYCLE
+    hijack = noise(seq, 99, 7) < 10                        # really rare: invaders seize the channel
+    if hijack:                                             # corrupted red transmission
+        col = ENEMY
+        msg = INVADER_COMMS[seq % len(INVADER_COMMS)]
+        fleck, jit0, jit1 = 46, 0.40, 0.60                 # heavy static, harsh jitter
+        sig = 0.45 + 0.5 * (noise(frame, 1, 1) / 255.0)    # weak, unstable signal
+    else:                                                  # steady allied green vox
+        col = COMMS_COL
+        msg = pick_comms(sessions, seq, active, lost)
+        fleck, jit0, jit1 = 4, 0.82, 0.18                  # subtle flecks, gentle jitter
+        sig = 0.86 + 0.14 * (noise(frame, 1, 1) / 255.0)
+
+    inner = dw(msg)
+    left = cx + 3
+    if left + inner + 1 > cols - 2:                        # keep the box on screen
+        left = max(1, cols - 2 - inner - 1)
+        if left + inner + 1 > cols - 2:                    # still too wide -> truncate
+            msg = fit(msg, max(4, cols - 2 - left - 1))
+            inner = dw(msg)
+    right = left + inner + 1
+
+    def cell(r, c, ch, glitchable):
+        nz = noise(c, r, frame // 2)
+        if glitchable and nz < fleck:                      # static fleck
+            ch, base = STATIC[nz % len(STATIC)], 0.45
+        else:                                              # gentle per-cell brightness jitter
+            base = jit0 + jit1 * (noise(c, r, frame // 2) / 255.0)
+        put_text(overlay, r, c, ch, dim(col, base * sig), cols)
+
+    cell(r_top, left, "┌", True)                           # top edge
+    for i in range(inner):
+        cell(r_top, left + 1 + i, "─", True)
+    cell(r_top, right, "┐", True)
+    cell(r_top + 1, left, "│", True)                       # sides + text (text glitches only on hijack)
+    for i, ch in enumerate(msg):
+        cell(r_top + 1, left + 1 + i, ch, hijack)
+    cell(r_top + 1, right, "│", True)
+    cell(r_bot, left, "└", True)                           # bottom edge
+    for i in range(inner):
+        cell(r_bot, left + 1 + i, "─", True)
+    cell(r_bot, right, "┘", True)
+
+
 def build_scene(fb, overlay, sessions, frame, rows, cols):
     fb.clear()
     cyan = (90, 200, 230)
@@ -462,6 +556,7 @@ def build_scene(fb, overlay, sessions, frame, rows, cols):
         fb.set(cx - d, ground_px - 1, WHITE)
     muzzle = draw_turret(fb, cx, ground_px, frame)      # 3-cell tower planted on the line
     draw_underground(fb, cx, ground_px, frame, powered)  # supply feed into base while firing
+    draw_comms(overlay, cx, surf_char, cols, frame, sessions, active, lost)
 
     n = len(sessions)
     if n:
