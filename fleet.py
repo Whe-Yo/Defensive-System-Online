@@ -62,6 +62,7 @@ WHITE = (245, 255, 250)
 ENEMY = (255, 78, 78)          # incoming alien fire
 GREY = (170, 170, 170)         # neutral grey (r=g=b -> stays grey, not blue, in 256c)
 ENERGY = (90, 220, 230)        # underground energy flow converging into the base
+RADAR = (40, 240, 90)          # saturated radar-scope green (stays green when dimmed/256c)
 
 STATUS = {
     "working":  ((80, 255, 150), "ENGAGED",  "교전"),     # turret fires
@@ -437,13 +438,20 @@ COMMS = {                          # short grimdark vox-lines that fit the corne
     "hold":  ["STAY YOUR GUNS", "AWAIT THE WORD", "HOLD... HOLD..."],
     "lost":  ["VOX GONE DARK", "ANOTHER SOUL LOST", "THEY ARE GONE"],
     "many":  ["THEY COME ENDLESS", "NO END TO THEM", "A TIDE OF THEM"],
-    "one":   ["TARGET MARKED", "BURN IT DOWN", "FOR THE FALLEN"],
+    "one":   ["TARGET MARKED", "BURN IT DOWN", "ONE LESS"],
     "watch": ["THEY CIRCLE US", "EYES TO THE DARK", "SOMETHING STIRS"],
     "clear": ["AN ILL-OMENED CALM", "THE LULL BEFORE", "TOO QUIET..."],
 }
 INVADER_COMMS = ["WE ARE LEGION", "YOU ARE PREY", "YOUR WALLS FALL",
                  "I SEE YOU", "WE HUNGER", "NO ESCAPE", "FLESH AND ASH",
                  "SILENCE YOUR GODS"]
+# crew calling for the commander (= the user) while input is awaited; escalates
+# by how long the wait has run (calm -> insistent -> desperate)
+HOLD_CALLS = [
+    ["ORDERS, COMMANDER?", "AWAITING ORDERS", "COMMAND, ADVISE"],
+    ["COMMANDER, YOUR ORDERS", "WE NEED A DECISION", "COMMAND, RESPOND"],
+    ["COMMANDER, RESPOND!!", "WHERE IS COMMAND?!", "WE STAND BLIND!!"],
+]
 STATIC = ".:'`~*"                  # radio-static flecks on the panel border
 
 
@@ -472,19 +480,31 @@ def draw_comms(overlay, cx, surf_char, cols, frame, sessions, active, lost):
     """An allied comms panel at the turret's upper-right. It appears ONLY while
     transmitting (intermittent); the line sits inside a thin box drawn with real
     box-drawing glyphs (a true 1-px line, not half-blocks)."""
-    if (frame % COMMS_CYCLE) >= COMMS_ON:                  # no transmission -> no box
+    wait_ages = [s.get("_age", 0) for s in sessions if s["_eff"] == "waiting"]
+    waiting = bool(wait_ages)
+    if not waiting and (frame % COMMS_CYCLE) >= COMMS_ON:  # idle gap (input-needed stays up)
         return
     r_bot = surf_char - 2
     r_top = r_bot - 2
     if r_top < 1:
         return
     seq = frame // COMMS_CYCLE
-    hijack = noise(seq, 99, 7) < 10                        # really rare: invaders seize the channel
+    hijack = (not waiting) and noise(seq, 99, 7) < 10      # really rare: invaders seize the channel
     if hijack:                                             # corrupted red transmission
         col = ENEMY
         msg = INVADER_COMMS[seq % len(INVADER_COMMS)]
         fleck, jit0, jit1 = 46, 0.40, 0.60                 # heavy static, harsh jitter
         sig = 0.45 + 0.5 * (noise(frame, 1, 1) / 255.0)    # weak, unstable signal
+    elif waiting:                                          # input needed -> call for the commander
+        age = max(wait_ages)
+        lvl = 0 if age < 12 else 1 if age < 40 else 2      # longer wait -> more desperate
+        col = COMMS_COL
+        msg = HOLD_CALLS[lvl][seq % len(HOLD_CALLS[lvl])]
+        fleck, jit0, jit1 = 4, 0.82, 0.18
+        if lvl >= 2:                                       # desperate: urgent alarm blink
+            sig = 0.5 + 0.5 * ((frame // 3) % 2)
+        else:
+            sig = 0.86 + 0.14 * (noise(frame, 1, 1) / 255.0)
     else:                                                  # steady allied green vox
         col = COMMS_COL
         msg = pick_comms(sessions, seq, active, lost)
@@ -520,6 +540,40 @@ def draw_comms(overlay, cx, surf_char, cols, frame, sessions, active, lost):
     for i in range(inner):
         cell(r_bot, left + 1 + i, "─", True)
     cell(r_bot, right, "┘", True)
+
+
+def fire_bullets(fb, mx, my, tx, ty, frame, seed):
+    """Turret main gun: a stream of tracer rounds (matches the background flak)
+    travelling from the muzzle up to the contact, with a muzzle flash."""
+    for k in range(3):                                     # a few rounds in flight
+        f = ((frame * 3 + seed * 7 + k * 9) % 18) / 18.0
+        for t in range(3):                                 # round + short trail
+            ft = f - t * 0.06
+            if ft < 0:
+                continue
+            x = int(mx + (tx - mx) * ft)
+            y = int(my + (ty - my) * ft)
+            fb.add(x, y, WHITE if t == 0 else TRACER, max(0.0, 0.9 - t * 0.3))
+    if (frame + seed) % 4 < 2:                             # muzzle flash
+        fb.add(mx, my, WHITE, 0.9)
+
+
+def scan_contact(fb, mx, my, cx, cy, frame, seed):
+    """TRACKING: a solid radar-green sweep line from the base, running through the
+    contact and on past it to the screen edge; the line pivots so the sweep
+    crosses the target back and forth."""
+    ex = cx + int(round(5 * math.sin(frame * 0.25 + seed)))  # sweep crosses the target L<->R
+    ey = cy
+    dx, dy = ex - mx, ey - my
+    dist = max(abs(dx), abs(dy), 1)
+    for i in range(dist * 3):                              # extend beyond the target to the edge
+        fr = i / dist
+        x = int(mx + dx * fr)
+        y = int(my + dy * fr)
+        if not (0 <= x < fb.w and 0 <= y < fb.h):
+            break
+        fb.add(x, y, RADAR, 0.5)
+    fb.add(ex, ey, WHITE, 0.65)                            # bright read at the contact
 
 
 def build_scene(fb, overlay, sessions, frame, rows, cols):
@@ -570,8 +624,9 @@ def build_scene(fb, overlay, sessions, frame, rows, cols):
             bacc = STATUS.get(beff, ((200, 200, 200),))[0]
             btx, bty = draw_boss(fb, p0, frame, bacc, beff == "working")
             if beff == "working":
-                fb.line(muzzle[0], muzzle[1], btx, bty, bacc, frame=frame, dashed=True)
-                fb.add(muzzle[0], muzzle[1], WHITE, 1.0)
+                fire_bullets(fb, muzzle[0], muzzle[1], btx, bty, frame, 99)
+            elif beff == "thinking":
+                scan_contact(fb, muzzle[0], muzzle[1], btx, bty, frame, 99)
         sky_top = p0 + 8 if boss_i is not None else p0 + 1
         others = [i for i in range(n) if i != boss_i]
         m = max(1, len(others))
@@ -584,16 +639,14 @@ def build_scene(fb, overlay, sessions, frame, rows, cols):
             bx = margin + (span * (2 * j + 1)) // (2 * m)
             by = sky_top + (noise(i, 4, 0) % span_y) + int(round(math.sin(frame * 0.1 + i)))
             draw_enemy(fb, bx, by, min(2, tiers[i]), eff, accent, frame)
-            if eff == "working":                         # turret beam at the contact's core
-                fb.line(muzzle[0], muzzle[1], bx, by, accent, frame=frame, dashed=True)
-                fb.add(muzzle[0], muzzle[1], WHITE, 1.0)
-            elif eff != "offline":                       # occasional alien fire DOWN
-                tt = (frame * 2 + i * 9) % 64
-                if tt < 12:
-                    fr = tt / 12.0
-                    ex = int(bx + (cx - bx) * fr)
-                    ey = int((by + 1) + (ground_px - 2 - (by + 1)) * fr)
-                    fb.add(ex, ey, ENEMY, 0.9)
+            seed = i + 1
+            if eff == "working":                         # main gun: tracer bullets at the contact
+                fire_bullets(fb, muzzle[0], muzzle[1], bx, by, frame, seed)
+            elif eff == "thinking":                      # green scan over the contact
+                scan_contact(fb, muzzle[0], muzzle[1], bx, by, frame, seed)
+            elif eff == "waiting":                       # minimal amber hold tick
+                if (frame // 4) % 2:
+                    fb.add(bx, by - 2, (255, 200, 90), 0.6)
 
     # ---- divider (below the single underground row) ----
     drow = surf_char + 2
