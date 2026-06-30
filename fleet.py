@@ -293,7 +293,7 @@ def draw_tracers(fb, frame, p0, surf_y, cols):
                 continue
             x = int(x0 + (x1 - x0) * ft)
             y = int(y0 + (y1 - y0) * ft)
-            fb.add(x, y, TRACER, max(0.0, 0.38 - t * 0.07))  # subdued, dim
+            fb.add(x, y, TRACER, max(0.0, 0.30 - t * 0.06))  # subdued, dimmer
 
 
 def draw_lasers(fb, frame, p0, surf_y, cols):
@@ -330,7 +330,7 @@ def draw_comets(fb, frame, p0, surf_y, cols):
     for k in range(n):
         L = travel + 16 + noise(k, 14, 0) % 30             # rarer than tracers
         ph = (frame + k * 23) % L
-        if ph >= travel:
+        if ph >= travel + 8:                               # keep going so the tail drains in
             continue
         cyc = (frame + k * 23) // L
         x0 = noise(k, 15, cyc) % cols                      # enters near the top
@@ -340,11 +340,11 @@ def draw_comets(fb, frame, p0, surf_y, cols):
         f = ph / travel
         for t in range(7):                                 # head + red tail (toward the sky)
             ft = f - t * 0.045
-            if ft < 0:
-                continue
+            if not 0.0 <= ft <= 1.0:                       # above launch / below ground -> skip
+                continue                                   #   head vanishes at the ground, tail keeps falling
             x = int(x0 + (x1 - x0) * ft)
             y = int(y0 + (y1 - y0) * ft)
-            fb.add(x, y, lerp(COMET, WHITE, 0.4) if t == 0 else COMET, max(0.0, 0.5 - t * 0.08))
+            fb.add(x, y, lerp(COMET, WHITE, 0.4) if t == 0 else COMET, max(0.0, 0.40 - t * 0.07))
 
 
 def draw_searchlight(fb, ox, oy, top_y, angle):
