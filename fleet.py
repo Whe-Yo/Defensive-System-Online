@@ -70,6 +70,8 @@ STATUS = {
     "waiting":  ((255, 84, 162), "HOLD",     "대기명령"),
     "idle":     ((90, 190, 230), "DORMANT",  "휴면"),
     "offline":  ((90, 100, 116), "LOST",     "소실"),
+    "pending":  ((120, 150, 185), "PENDING",  "대기과제"),  # queued todo (incoming, no fire)
+    "done":     ((70, 130, 95),   "CLEARED",  "완료"),       # completed todo (log only)
 }
 
 # descending hostile contact, 11 x 6  (k=shell, m=membrane[accent], e=eye)
@@ -193,7 +195,8 @@ class FB:
 # ---- scene elements ---------------------------------------------------------
 # ASCII-only glyphs — avoid East-Asian "ambiguous width" chars that render as
 # 2 cells in CJK terminals/tmux and break the 1-cell-per-char column model.
-DOT = {"working": "*", "thinking": "+", "waiting": "!", "idle": "o", "offline": "x"}
+DOT = {"working": "*", "thinking": "+", "waiting": "!", "idle": "o", "offline": "x",
+       "pending": ".", "done": "v"}
 
 
 def draw_turret(fb, cx, bottom, frame):
@@ -211,13 +214,46 @@ def draw_turret(fb, cx, bottom, frame):
     return cx, top - 1
 
 
-TIERS = (8, 30, 100)           # tool_count thresholds: cross | diamond | large | BOSS
+TIERS = (10, 80, 400)          # (tool_count x elapsed-min) thresholds: cross|diamond|large|BOSS
 
 
 def tier(st):
-    """Task-scale proxy from cumulative tool calls (Claude exposes no true size)."""
-    h = st.get("tool_count", 0)
-    return 0 if h < TIERS[0] else 1 if h < TIERS[1] else 2 if h < TIERS[2] else 3
+    """Task-scale proxy: cumulative tool calls x elapsed minutes (Claude exposes no
+    true size). Heavier + longer-running work grows into larger contacts."""
+    t = st.get("tool_count", 0)
+    m = max(0.0, (time.time() - st.get("started_at", time.time())) / 60.0)
+    score = t * m
+    return 0 if score < TIERS[0] else 1 if score < TIERS[1] else 2 if score < TIERS[2] else 3
+
+
+def build_contacts(sessions):
+    """Expand sessions into contacts. A session running a TodoWrite task list yields
+    one contact per todo (pending / in_progress shown, completed -> 'done'); a
+    session with no todos yields a single session-level contact (fallback)."""
+    out = []
+    for s in sessions:
+        base = {"sid": s.get("session_id", ""),
+                "project": os.path.basename(s.get("cwd", "")) or "~",
+                "hits": s.get("tool_count", 0),
+                "started_at": s.get("started_at", time.time()),
+                "age": s.get("_age", 0)}
+        todos = [t for t in (s.get("todos") or []) if t.get("c")]
+        if todos and s["_eff"] != "offline":
+            stier = tier(s)
+            for t in todos:
+                stt = t.get("s", "pending")
+                if stt == "completed":
+                    eff, ct = "done", 0
+                elif stt == "in_progress":
+                    eff = s["_eff"] if s["_eff"] in ("working", "thinking", "waiting") else "working"
+                    ct = stier
+                else:
+                    eff, ct = "pending", 0
+                out.append({**base, "eff": eff, "label": t.get("c", ""), "tier": ct, "todo": stt})
+        else:
+            out.append({**base, "eff": s["_eff"], "label": s.get("action", "") or "-",
+                        "tier": tier(s), "todo": None})
+    return out
 
 
 def draw_enemy(fb, cx, cy, t, eff, accent, frame):
@@ -346,6 +382,16 @@ def draw_comets(fb, frame, p0, surf_y, cols):
             x = int(x0 + (x1 - x0) * ft)
             y = int(y0 + (y1 - y0) * ft)
             fb.add(x, y, lerp(COMET, WHITE, 0.4) if t == 0 else COMET, max(0.0, 0.40 - t * 0.07))
+        for sp in range(3):                                # flickering embers/sparks (flame-like)
+            fs = f - (0.03 + sp * 0.07)
+            if not 0.0 <= fs <= 1.0:
+                continue
+            bx = int(x0 + (x1 - x0) * fs)
+            by = int(y0 + (y1 - y0) * fs)
+            nz = noise(bx, by, frame)
+            if nz < 90:                                    # twinkle on/off
+                ember = (255, 220, 120) if nz % 2 else (255, 160, 70)
+                fb.add(bx + (nz % 3 - 1), by, ember, 0.30 + 0.0015 * nz)
 
 
 def draw_searchlight(fb, ox, oy, top_y, angle):
@@ -587,7 +633,9 @@ def build_scene(fb, overlay, sessions, frame, rows, cols):
     # ---- header (row 0) ----
     put_text(overlay, 0, 1, "INUNDATION_AGENT", green, cols)
     put_text(overlay, 0, 18, "// ORBITAL DEFENSE", cyan, cols)
-    hud = f"{active} ENGAGING  {len(sessions)} CONTACTS  {lost} LOST   q quit"
+    contacts = build_contacts(sessions)                 # one contact per todo (task), or per session
+    sky = [c for c in contacts if c["eff"] != "done"]
+    hud = f"{active} ENGAGING  {len(sky)} CONTACTS  {lost} LOST   q quit"
     put_text(overlay, 0, max(19, cols - len(hud) - 1), hud, cyan, cols)
 
     # ---- scene: sky (top) | ground at terminal centre | 3-row underground ----
@@ -612,15 +660,13 @@ def build_scene(fb, overlay, sessions, frame, rows, cols):
     draw_underground(fb, cx, ground_px, frame, powered)  # supply feed into base while firing
     draw_comms(overlay, cx, surf_char, cols, frame, sessions, active, lost)
 
-    n = len(sessions)
-    if n:
-        tiers = [tier(s) for s in sessions]
+    ns = len(sky)
+    if ns:
         boss_i = None                                    # one colossal boss = the largest >= tier 3
-        cand = [(s.get("tool_count", 0), i) for i, s in enumerate(sessions) if tiers[i] >= 3]
+        cand = [(c["tier"], i) for i, c in enumerate(sky) if c["tier"] >= 3]
         if cand:
             boss_i = max(cand)[1]
-            bs = sessions[boss_i]
-            beff = bs["_eff"]
+            beff = sky[boss_i]["eff"]
             bacc = STATUS.get(beff, ((200, 200, 200),))[0]
             btx, bty = draw_boss(fb, p0, frame, bacc, beff == "working")
             if beff == "working":
@@ -628,17 +674,17 @@ def build_scene(fb, overlay, sessions, frame, rows, cols):
             elif beff == "thinking":
                 scan_contact(fb, muzzle[0], muzzle[1], btx, bty, frame, 99)
         sky_top = p0 + 8 if boss_i is not None else p0 + 1
-        others = [i for i in range(n) if i != boss_i]
+        others = [i for i in range(ns) if i != boss_i]
         m = max(1, len(others))
         margin, span = 6, max(1, cols - 12)
         span_y = max(2, ground_px - 3 - sky_top)         # scatter contacts below the boss
         for j, i in enumerate(others):
-            st = sessions[i]
-            eff = st["_eff"]
+            c = sky[i]
+            eff = c["eff"]
             accent = STATUS.get(eff, ((200, 200, 200),))[0]
             bx = margin + (span * (2 * j + 1)) // (2 * m)
             by = sky_top + (noise(i, 4, 0) % span_y) + int(round(math.sin(frame * 0.1 + i)))
-            draw_enemy(fb, bx, by, min(2, tiers[i]), eff, accent, frame)
+            draw_enemy(fb, bx, by, min(2, c["tier"]), eff, accent, frame)
             seed = i + 1
             if eff == "working":                         # main gun: tracer bullets at the contact
                 fire_bullets(fb, muzzle[0], muzzle[1], bx, by, frame, seed)
@@ -647,6 +693,7 @@ def build_scene(fb, overlay, sessions, frame, rows, cols):
             elif eff == "waiting":                       # minimal amber hold tick
                 if (frame // 4) % 2:
                     fb.add(bx, by - 2, (255, 200, 90), 0.6)
+            # pending / idle / offline: just the descending sprite (no turret fire)
 
     # ---- divider (below the single underground row) ----
     drow = surf_char + 2
@@ -654,36 +701,37 @@ def build_scene(fb, overlay, sessions, frame, rows, cols):
         fb.set(x, drow * 2, dim(cyan, 0.35))
         fb.set(x, drow * 2 + 1, dim(cyan, 0.35))
 
-    # ---- readable list: one line per session ----
+    # ---- readable list: one line per task (todo), grouped by session ----
     list_top = drow + 1
     capacity = max(0, rows - list_top)
-    shown = sessions if n <= capacity else sessions[:max(0, capacity - 1)]
-    for i, st in enumerate(shown):
-        eff = st["_eff"]
+    nc = len(contacts)
+    shown = contacts if nc <= capacity else contacts[:max(0, capacity - 1)]
+    prev_sid = None
+    for i, c in enumerate(shown):
+        eff = c["eff"]
         accent, label, kor = STATUS.get(eff, ((200, 200, 200), eff, ""))
-        proj = fit(os.path.basename(st.get("cwd", "")) or "~", 20)
-        op = fmt_dur(time.time() - st.get("started_at", time.time()))
-        hits = st.get("tool_count", 0)
-        action = st.get("action", "") or "-"
-        if eff == "idle" and st.get("_age", 0) > 2:
-            action = f"idle {fmt_dur(st['_age'])}"
+        proj = fit(c["project"], 20) if c["sid"] != prev_sid else ""   # project once per session
+        prev_sid = c["sid"]
+        op = fmt_dur(time.time() - c["started_at"])
+        action = c["label"] or "-"
+        if eff == "idle" and c["age"] > 2:
+            action = f"idle {fmt_dur(c['age'])}"
         elif eff == "offline":
-            action = f"lost {fmt_dur(st['_age'])} ago"
-        tail = f"{hits}t {op}"          # {tools}t  {elapsed: s/m/h}
+            action = f"lost {fmt_dur(c['age'])} ago"
+        tail = f"{c['hits']}t {op}"          # {tools}t  {elapsed: s/m/h}
         row = list_top + i
         put_text(overlay, row, 1, DOT.get(eff, "?"), accent, cols)
         put_text(overlay, row, 3, label, accent, 12)
         put_text(overlay, row, 13, proj, cyan, 34)            # width-aware (한글 OK)
-        put_text(overlay, row, 34, sig_blocks(st, 8), accent, cols)
-        # action: fit (by display width) between col 43 and the tail, with a gap
+        put_text(overlay, row, 34, sig_blocks({"_age": c["age"], "_eff": eff}, 8), accent, cols)
         avail = max(0, cols - len(tail) - 2 - 45)             # 45 = 43 + len("> ")
-        put_text(overlay, row, 43, "> " + fit(action, avail),
-                 green if eff == "working" else dim(cyan, 0.85), cols - len(tail) - 2)
+        body = green if eff == "working" else (dim(green, 0.5) if eff == "done" else dim(cyan, 0.85))
+        put_text(overlay, row, 43, "> " + fit(action, avail), body, cols - len(tail) - 2)
         put_text(overlay, row, cols - len(tail) - 1, tail, dimc, cols)
 
-    if n > len(shown):
+    if nc > len(shown):
         put_text(overlay, list_top + len(shown), 1,
-                 f"+{n - len(shown)} more (enlarge terminal)", dimc, cols)
+                 f"+{nc - len(shown)} more (enlarge terminal)", dimc, cols)
     if not sessions:
         put_center(overlay, list_top + 1, cols // 2,
                    "SKIES CLEAR - no contacts. Use a tool in any session.",

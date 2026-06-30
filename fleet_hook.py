@@ -88,6 +88,11 @@ def main():
         st["tool"] = tool
         tgt = describe(tool, ev.get("tool_input"))
         st["action"] = f"{tool} {tgt}".strip()
+        if tool == "TodoWrite":                          # capture the task list (one enemy per todo)
+            items = (ev.get("tool_input") or {}).get("todos") or []
+            st["todos"] = [{"c": short(it.get("content", ""), 38),
+                            "s": it.get("status", "pending")}
+                           for it in items if it.get("content")]
     elif name == "PostToolUse":
         st["tool_count"] = int(st.get("tool_count", 0)) + 1
         st["status"] = "thinking"
