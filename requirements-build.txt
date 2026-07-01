@@ -1,0 +1,4 @@
+# Build-only dependency. Runtime needs nothing (pure stdlib).
+#   pip install -r requirements-build.txt
+#   pyinstaller build/fleet.spec
+pyinstaller>=6.0

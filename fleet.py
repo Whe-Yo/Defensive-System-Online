@@ -894,20 +894,51 @@ def run_bench(n, truecolor):
           f"{n / dt:.1f} fps-compute  ~{total // n} B/frame")
 
 
-def run_loop(fps, truecolor):
-    import termios
-    import tty
-    import select
-    import signal
+def enable_windows_vt():
+    """Turn on ANSI/VT escape processing for the Windows console (Win10 1607+).
 
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
+    Returns True if VT is active (always True off Windows). If this returns
+    False on Windows the terminal can't render our escapes (legacy conhost) and
+    the caller should warn — the whole renderer is VT-based.
+    """
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.windll.kernel32
+        k.GetStdHandle.restype = wintypes.HANDLE            # HANDLE is 64-bit on x64
+        k.GetStdHandle.argtypes = [wintypes.DWORD]
+        k.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        k.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        h = k.GetStdHandle(-11)                             # STD_OUTPUT_HANDLE
+        mode = wintypes.DWORD()
+        if not k.GetConsoleMode(h, ctypes.byref(mode)):
+            return False                                    # not a real console (redirected, etc.)
+        return bool(k.SetConsoleMode(h, mode.value | 0x0004))  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    except Exception:
+        return False
+
+
+def run_loop(fps, truecolor):
+    import signal
+    windows = os.name == "nt"
+    if windows:
+        import msvcrt
+    else:
+        import termios
+        import tty
+        import select
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+
     sys.stdout.write("\x1b[?1049h\x1b[?25l")
     sys.stdout.flush()
     stop = {"v": False}
     signal.signal(signal.SIGINT, lambda *a: stop.__setitem__("v", True))
     try:
-        tty.setcbreak(fd)
+        if not windows:
+            tty.setcbreak(fd)
         prev, psize, frame = None, None, 0
         dt = 1.0 / fps
         sessions, last_poll = read_sessions(), time.time()
@@ -925,21 +956,38 @@ def run_loop(fps, truecolor):
             sys.stdout.flush()
             prev = grid
             frame += 1
-            if select.select([sys.stdin], [], [], dt)[0]:
-                if sys.stdin.read(1).lower() == "q":
-                    break
+            if windows:                                    # msvcrt has no select(); poll kbhit until next frame
+                t_end = time.time() + dt
+                while time.time() < t_end and not stop["v"]:
+                    if msvcrt.kbhit() and msvcrt.getch().lower() == b"q":
+                        stop["v"] = True
+                        break
+                    time.sleep(0.005)
+            else:
+                if select.select([sys.stdin], [], [], dt)[0]:
+                    if sys.stdin.read(1).lower() == "q":
+                        break
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        if not windows:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
         sys.stdout.write("\x1b[0m\x1b[?25h\x1b[?1049l")
         sys.stdout.flush()
 
 
 def main():
     args = sys.argv[1:]
+    if not enable_windows_vt() and sys.stdout.isatty():
+        sys.stderr.write("warning: this console lacks ANSI/VT support "
+                         "(needs Windows Terminal or Win10 1607+); output may be garbled.\n")
     if "--cards" in args:
-        here = os.path.dirname(os.path.abspath(__file__))
-        os.execv(sys.executable, [sys.executable, os.path.join(here, "fleet_cards.py")]
-                 + [a for a in args if a != "--cards"])
+        if getattr(sys, "frozen", False):                  # bundled binary: fleet_cards not included
+            sys.stderr.write("--cards is not bundled in this binary; "
+                             "run 'python fleet_cards.py' instead.\n")
+            args = [a for a in args if a != "--cards"]
+        else:
+            here = os.path.dirname(os.path.realpath(__file__))
+            os.execv(sys.executable, [sys.executable, os.path.join(here, "fleet_cards.py")]
+                     + [a for a in args if a != "--cards"])
     truecolor = "--truecolor" in args
     fps = 12
     if "--fps" in args:

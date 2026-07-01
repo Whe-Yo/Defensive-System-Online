@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Orbital Defense (fleet)
+Comment=Claude Code sessions dashboard
+Exec=/root/.local/bin/fleet
+Terminal=true
+Categories=Utility;
