@@ -1,4 +1,0 @@
-# Build-only dependency. Runtime needs nothing (pure stdlib).
-#   pip install -r requirements-build.txt
-#   pyinstaller build/dso.spec
-pyinstaller>=6.0
