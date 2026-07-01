@@ -48,5 +48,14 @@ ENGAGED(교전/도구실행) · TRACKING(추론) · HOLD(입력·권한 대기) 
 - SIG 게이지는 완료율이 아니라 **활동 신호** (Claude가 진행%를 노출 안 함). "완료%"로 오해 금지.
 - 훅은 절대 도구 호출을 막으면 안 됨 (stdout 없음·exit 0 유지).
 
+## 안티테제 (260701, 리팩터 검토)
+- **채택** #2 read_settings: 파싱 실패 시 `{}` 반환 → settings.json 전체 덮어써 사용자 훅/권한 소실 위험 → 중단하도록 수정(검증됨).
+- **채택** #1 Windows PATH: `setx PATH "%PATH%;.."`는 병합 PATH 오염+1024자 잘림 → PowerShell `SetEnvironmentVariable(...,'User')`로 교체 (**Windows 미검증** — 리눅스 환경).
+- **채택** #4 dso.sh: `gnome/xfce4-terminal -e` 다중인자 미지원 → `--` 분기.
+- **채택** #5 dso.sh: macOS `readlink -f` 부재 → 이식성 있는 symlink 해석(검증됨).
+- **기각** #3 sys.executable→python3: 훅 exec 환경 PATH에 python3 부재 위험 신규 발생, 절대경로가 일반 설치에서 더 안전.
+- **주석수정** #6 tty OR 판정 과장 주석 정정.
+
 ## 다음 할 일
 - (미정 — 사용자 지시 대기)
+- Windows에서 install.py PATH 등록 실제 검증 (현재 미검증).

@@ -40,8 +40,12 @@ def read_settings():
     try:
         with open(SETTINGS, encoding="utf-8-sig") as f:   # tolerate a pre-existing BOM
             return json.load(f)
-    except Exception:
-        return {}
+    except Exception as e:
+        # settings.json exists but won't parse (mid-edit typo, lock, encoding). Do NOT
+        # return {} — write_settings would then overwrite and wipe the user's other
+        # hooks/permissions/env. Refuse and let them fix it first.
+        sys.exit(f"error: {SETTINGS} exists but could not be parsed ({e}).\n"
+                 "fix or remove it and re-run install (refusing to overwrite your settings).")
 
 
 def write_settings(data):
@@ -112,11 +116,18 @@ def install_command_unix():
 
 def install_command_windows():
     launcher = os.path.join(HERE, "dso.bat")   # `dso` on PATH resolves to dso.bat
-    cur = os.environ.get("PATH", "")
-    if HERE.lower() not in cur.lower():
-        subprocess.run(["setx", "PATH", f"{cur};{HERE}"],
+    # Append to the USER PATH only, via PowerShell. NOT `setx PATH "%PATH%;..."`:
+    # os.environ["PATH"] is the merged system+user PATH, and setx would (a) copy every
+    # system entry into the user PATH and (b) silently truncate at 1024 chars.
+    ps = ("$p=[Environment]::GetEnvironmentVariable('PATH','User');"
+          f"if($p -notlike '*{HERE}*'){{"
+          f"[Environment]::SetEnvironmentVariable('PATH',($p.TrimEnd(';')+';'+'{HERE}'),'User')}}")
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"added to PATH: {HERE}  (open a NEW terminal for `dso`)")
+    if r.returncode == 0:
+        print(f"added to user PATH: {HERE}  (open a NEW terminal for `dso`)")
+    else:
+        print(f"could not update PATH automatically; add this folder to PATH manually: {HERE}")
     print(f"command -> {launcher}")
 
 
