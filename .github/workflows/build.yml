@@ -12,11 +12,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: fleet-linux
-            binary: fleet
+            artifact: dso-linux
+            binary: dso
           - os: windows-latest
-            artifact: fleet-windows
-            binary: fleet.exe
+            artifact: dso-windows
+            binary: dso.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -29,7 +29,7 @@ jobs:
         run: python -m pip install --upgrade pip pyinstaller
 
       - name: Build
-        run: pyinstaller build/fleet.spec
+        run: pyinstaller build/dso.spec
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

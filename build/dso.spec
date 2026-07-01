@@ -1,17 +1,17 @@
-# PyInstaller spec — single-file `fleet` binary (Linux) / `fleet.exe` (Windows).
-# Build:  pyinstaller build/fleet.spec
-# Produces dist/fleet (or dist/fleet.exe). --cards/textual is intentionally excluded.
+# PyInstaller spec — single-file `dso` binary (Linux) / `dso.exe` (Windows).
+# Build:  pyinstaller build/dso.spec
+# Produces dist/dso (or dist/dso.exe). --cards/textual is intentionally excluded.
 import sys
 
 block_cipher = None
 
 a = Analysis(
-    ["../fleet.py"],
+    ["../dso.py"],
     pathex=["."],
     binaries=[],
     datas=[],
     hiddenimports=[],
-    excludes=["textual", "rich", "fleet_cards"],
+    excludes=["textual", "rich", "dso_cards"],
     hookspath=[],
     runtime_hooks=[],
     cipher=block_cipher,
@@ -25,7 +25,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="fleet",
+    name="dso",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

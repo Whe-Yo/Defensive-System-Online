@@ -6,8 +6,8 @@ frigate in a retro CRT-neon fleet command display. Aesthetic inspired by the
 *범람 (Inundation)* project (CRT neon vector, rectilinear hard-SF warships) —
 this is a monitor, not the game; 범람 is developed separately.
 
-    python3 fleet.py            # run the console
-    python3 fleet.py --once     # print one frame and exit (no TUI)
+    python3 dso_cards.py            # run the console
+    python3 dso_cards.py --once     # print one frame and exit (no TUI)
 
 Honest note: Claude exposes no true task "% complete". The REACTOR gauge shows
 *activity output* (full while acting, decaying while idle); SECTOR is a cosmetic

@@ -19,12 +19,12 @@ Why half-block: one terminal cell = two vertically-stacked pixels (the `▀`
 char with independent fg/bg colours), giving a colour framebuffer that survives
 tmux/SSH (it is coloured text, not a bitmap protocol).
 
-    python3 fleet.py             # run the live scene  (q / Ctrl-C to quit)
-    python3 fleet.py --once      # print one frame and exit (snapshot)
-    python3 fleet.py --fps 15    # frame rate (default 12)
-    python3 fleet.py --truecolor # 24-bit colour (needs RGB-capable tmux/term)
-    python3 fleet.py --cards     # simple card view (fleet_cards.py)
-    python3 fleet.py --bench 60  # render-only benchmark
+    dso                          # run the live scene  (q / Ctrl-C to quit)
+    dso --once                   # print one frame and exit (snapshot)
+    dso --fps 15                 # frame rate (default 12)
+    dso --truecolor              # 24-bit colour (needs RGB-capable tmux/term)
+    dso --cards                  # simple card view (dso_cards.py; source only)
+    dso --bench 60               # render-only benchmark
 
 Honest note: Claude exposes no true task "% complete". The SIG gauge shows
 *activity output* (full while acting, decaying while idle); the turret fires
@@ -980,13 +980,13 @@ def main():
         sys.stderr.write("warning: this console lacks ANSI/VT support "
                          "(needs Windows Terminal or Win10 1607+); output may be garbled.\n")
     if "--cards" in args:
-        if getattr(sys, "frozen", False):                  # bundled binary: fleet_cards not included
+        if getattr(sys, "frozen", False):                  # bundled binary: dso_cards not included
             sys.stderr.write("--cards is not bundled in this binary; "
-                             "run 'python fleet_cards.py' instead.\n")
+                             "run 'python dso_cards.py' instead.\n")
             args = [a for a in args if a != "--cards"]
         else:
             here = os.path.dirname(os.path.realpath(__file__))
-            os.execv(sys.executable, [sys.executable, os.path.join(here, "fleet_cards.py")]
+            os.execv(sys.executable, [sys.executable, os.path.join(here, "dso_cards.py")]
                      + [a for a in args if a != "--cards"])
     truecolor = "--truecolor" in args
     fps = 12

@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
-Name=Orbital Defense (fleet)
+Name=DSO — Orbital Defense
 Comment=Claude Code sessions dashboard
-Exec=/root/.local/bin/fleet
+Exec=dso
 Terminal=true
 Categories=Utility;

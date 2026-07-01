@@ -31,7 +31,7 @@ INUNDATION_AGENT // ORBITAL DEFENSE       3 ENGAGING  5 CONTACTS  0 LOST   q qui
  * ENGAGED   ml-pipeline        ▮▮▮▮▮▮▮▯ > Read config.yaml              22t  1m
  * ENGAGED   BeatSenseVid_VJ    ▮▮▮▮▮▮▮▯ > Bash pytest -q tests/unit      4t  2m
  ! HOLD      api-gateway        ▮▮▮▮▮▮▮▯ > permission: Bash(rm -rf ..)     7t 25m
- * ENGAGED   Inundation_Agent   ▮▮▮▮▮▮▮▯ > Edit fleet.py                 45t 12m
+ * ENGAGED   Inundation_Agent   ▮▮▮▮▮▮▮▯ > Edit dso.py                 45t 12m
  o DORMANT   2dtomesh           ▮▮▮▯▯▯▯▯ > idle 40s                      12t  3m
 ```
 (Real output is animated truecolor/256-colour neon; the above is a mono sketch.)
@@ -39,16 +39,18 @@ INUNDATION_AGENT // ORBITAL DEFENSE       3 ENGAGING  5 CONTACTS  0 LOST   q qui
 ## How it works
 
 ```
-each Claude session ─(hook)─> ~/.claude/inundation_agent/<id>.json ─(read)─> fleet.py
+each Claude session ─(hook)─> ~/.claude/inundation_agent/<id>.json ─(read)─> dso.py
 ```
 
-- `fleet_hook.py` — receives every session's hook events (tool use, prompts, stops)
-  and writes a per-session state file. **No stdout, always exits 0**, so it can never
-  block a tool call.
-- `fleet.py` — reads that folder every frame and renders the **scene** (contacts,
+- `install.py` — the only setup file. Writes the event hook to `~/.claude/dso_hook.py`
+  and registers it in `settings.json`; installs the `dso` command. The installed hook
+  receives every session's event and writes a per-session state file. **No stdout,
+  always exits 0**, so it can never block a tool call.
+- `dso.py` — reads that folder every frame and renders the **scene** (contacts,
   turret, beams, background FX) plus the **per-session list**. Diff rendering (only
-  changed cells are emitted) keeps it light over SSH.
-- `fleet_cards.py` — a lightweight static card view (`fleet.py --cards`).
+  changed cells are emitted) keeps it light over SSH. Built into the `dso` binary.
+- `dso_cards.py` — a lightweight static card view (`python3 dso_cards.py`; source only,
+  not bundled in the binary).
 
 ## Scene elements
 
@@ -80,21 +82,21 @@ each Claude session ─(hook)─> ~/.claude/inundation_agent/<id>.json ─(read)
 ## Install
 
 ```bash
-bash install.sh          # register hooks in ~/.claude/settings.json (idempotent, backed up)
+python3 install.py          # register hooks in ~/.claude/settings.json (idempotent, backed up)
 ```
 
 Tracking begins **from newly started sessions** (existing ones appear on their next
-tool use). After moving the folder: `bash install.sh --uninstall && bash install.sh`.
+tool use). After moving the folder: `python3 install.py --uninstall && python3 install.py`.
 
 ## Run
 
 ```bash
-python3 fleet.py              # live pixel scene (q or Ctrl-C to quit)
-python3 fleet.py --fps 15     # frame rate (default 12, range 2–30); lower it on slow SSH
-python3 fleet.py --truecolor  # 24-bit neon (needs an RGB-capable terminal/tmux)
-python3 fleet.py --once        # print one frame and exit (snapshot)
-python3 fleet.py --cards       # card view instead of pixels
-python3 fleet.py --bench 60    # render-only benchmark (fps, bytes/frame)
+dso              # live pixel scene (q or Ctrl-C to quit)
+dso --fps 15     # frame rate (default 12, range 2–30); lower it on slow SSH
+dso --truecolor  # 24-bit neon (needs an RGB-capable terminal/tmux)
+dso --once        # print one frame and exit (snapshot)
+dso --bench 60    # render-only benchmark (fps, bytes/frame)
+python3 dso_cards.py   # card view instead of pixels (source only)
 ```
 
 - **Colour**: 256-colour by default (works on `tmux-256color`). For truecolor neon use
@@ -106,12 +108,12 @@ python3 fleet.py --bench 60    # render-only benchmark (fps, bytes/frame)
 ## Uninstall
 
 ```bash
-bash install.sh --uninstall   # remove hooks (settings.json is backed up)
+python3 install.py --uninstall   # remove hooks (settings.json is backed up)
 ```
 
 ## Tuning
 
-`fleet.py` top-of-file constants: `IDLE_AFTER`, `OFFLINE_AFTER`, `PRUNE_AFTER`,
+`dso.py` top-of-file constants: `IDLE_AFTER`, `OFFLINE_AFTER`, `PRUNE_AFTER`,
 `TIERS` (task-scale thresholds), `STATUS` / palette, `draw_turret` (base shape),
 the background-FX functions (`draw_tracers` / `draw_lasers` / `draw_comets`),
 `MAX_W` / `MAX_H` (render caps).
@@ -143,14 +145,15 @@ the background-FX functions (`draw_tracers` / `draw_lasers` / `draw_comets`),
 ## 동작 구조
 
 ```
-각 Claude 세션 ─(hook)─> ~/.claude/inundation_agent/<id>.json ─(읽기)─> fleet.py 렌더러
+각 Claude 세션 ─(hook)─> ~/.claude/inundation_agent/<id>.json ─(읽기)─> dso.py 렌더러
 ```
 
-- `fleet_hook.py` — 모든 세션의 훅 이벤트(도구 사용·프롬프트·정지 등)를 받아 세션별
-  상태 파일에 기록. **stdout 없음 · 항상 exit 0** → 도구 호출을 절대 막지 않는다.
-- `fleet.py` — 상태 폴더를 매 프레임 읽어 **씬**(적대체·터렛·빔·배경 효과)과
-  **세션 리스트**를 렌더. 차분 렌더(바뀐 칸만 전송)로 SSH에서도 가볍다.
-- `fleet_cards.py` — 픽셀 대신 정적 카드 뷰 (`fleet.py --cards`).
+- `install.py` — 유일한 설치 파일. 훅을 `~/.claude/dso_hook.py`로 쓰고 `settings.json`에
+  등록하며 `dso` 명령까지 설치한다. 설치된 훅은 모든 세션 이벤트를 받아 세션별 상태
+  파일에 기록한다. **stdout 없음 · 항상 exit 0** → 도구 호출을 절대 막지 않는다.
+- `dso.py` — 상태 폴더를 매 프레임 읽어 **씬**(적대체·터렛·빔·배경 효과)과
+  **세션 리스트**를 렌더. 차분 렌더(바뀐 칸만 전송)로 SSH에서도 가볍다. `dso` 바이너리로 빌드됨.
+- `dso_cards.py` — 픽셀 대신 정적 카드 뷰 (`python3 dso_cards.py`; 소스 전용, 바이너리 미포함).
 
 ## 씬 구성
 
@@ -181,21 +184,21 @@ the background-FX functions (`draw_tracers` / `draw_lasers` / `draw_comets`),
 ## 설치
 
 ```bash
-bash install.sh          # ~/.claude/settings.json에 훅 등록(멱등·백업)
+python3 install.py          # ~/.claude/settings.json에 훅 등록(멱등·백업)
 ```
 
 **새로 시작하는 세션부터** 추적된다(기존 세션은 다음 도구 사용 시 등장). 경로를 옮긴
-뒤에는 `bash install.sh --uninstall && bash install.sh`로 훅을 재연결한다.
+뒤에는 `python3 install.py --uninstall && python3 install.py`로 훅을 재연결한다.
 
 ## 실행
 
 ```bash
-python3 fleet.py              # 라이브 픽셀 씬 (q 또는 Ctrl-C 종료)
-python3 fleet.py --fps 15     # 프레임레이트(기본 12, 2~30). SSH 느리면 낮춰라
-python3 fleet.py --truecolor  # 24비트 네온 (RGB 지원 터미널/tmux)
-python3 fleet.py --once        # 한 프레임만 출력하고 종료 (스냅샷)
-python3 fleet.py --cards       # 픽셀 대신 카드 뷰
-python3 fleet.py --bench 60    # 렌더 벤치 (fps·프레임당 바이트)
+dso              # 라이브 픽셀 씬 (q 또는 Ctrl-C 종료)
+dso --fps 15     # 프레임레이트(기본 12, 2~30). SSH 느리면 낮춰라
+dso --truecolor  # 24비트 네온 (RGB 지원 터미널/tmux)
+dso --once        # 한 프레임만 출력하고 종료 (스냅샷)
+dso --bench 60    # 렌더 벤치 (fps·프레임당 바이트)
+python3 dso_cards.py   # 픽셀 대신 카드 뷰 (소스 전용)
 ```
 
 - **색**: 기본 256색(`tmux-256color`에서 동작). 트루컬러 네온은 `--truecolor` +
@@ -206,11 +209,11 @@ python3 fleet.py --bench 60    # 렌더 벤치 (fps·프레임당 바이트)
 ## 제거
 
 ```bash
-bash install.sh --uninstall   # 훅 제거 (settings.json 백업됨)
+python3 install.py --uninstall   # 훅 제거 (settings.json 백업됨)
 ```
 
 ## 튜닝
 
-`fleet.py` 상단 상수: `IDLE_AFTER`·`OFFLINE_AFTER`·`PRUNE_AFTER`, `TIERS`(작업 규모
+`dso.py` 상단 상수: `IDLE_AFTER`·`OFFLINE_AFTER`·`PRUNE_AFTER`, `TIERS`(작업 규모
 임계값), `STATUS`·팔레트, `draw_turret`(기지 모양), 배경 효과 함수(`draw_tracers`·
 `draw_lasers`·`draw_comets`), `MAX_W`·`MAX_H`(렌더 상한).
